@@ -1,0 +1,3 @@
+### ALL COMMANDS 
+
+run a fast api application:- uvicorn app.main:app --reload

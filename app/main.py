@@ -2,7 +2,9 @@ from fastapi import FastAPI, Response, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
 from random import randrange
-
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import time
 
 app = FastAPI()
 
@@ -14,75 +16,107 @@ class PostModel(BaseModel):
     rating: Optional[int] = None
 
 
+# database connection
+while True:
+    try:
+        conn = psycopg2.connect(
+            host="localhost",
+            database="fast_apiDB",
+            user="postgres",
+            password="sunshine",
+            cursor_factory=RealDictCursor,
+        )
+        cursor = conn.cursor()
+        print("database connection was successful")
+        break
+
+    except Exception as e:
+        print("problem connecting to the database. Reason:", {e})
+        time.sleep(2)
+
+
 class UpdatePost(BaseModel):
     title: str
     content: str
     rating: Optional[int] = None
-
-
-my_posts = [
-    {
-        "id": 1,
-        "title": "First Post",
-        "content": "This is my first post",
-        "published": True,
-        "rating": 5,
-    },
-    {
-        "id": 2,
-        "title": "Second Post",
-        "content": "This is my second post",
-        "published": False,
-        "rating": None,
-    },
-]
+    published: bool = True
 
 
 # PATH OPERATION
+
+
+# GET ALL POST
 @app.get("/")
 async def get_root():
-    return {"message": "Welcome to my API"}
+    cursor.execute(""" SELECT * FROM post """)
+    posts = cursor.fetchall()
+    return {"data": posts}
 
 
-@app.get("/posts")
-async def get_posts() -> dict:
-    return {
-        "message": my_posts,
-    }
+# @app.get("/posts")
+# async def get_posts() -> dict:
+#     return {
+#         "message": my_posts,
+#     }
 
 
+# CREATE A POST
 @app.post("/posts", status_code=201)
 async def create_post(post: PostModel) -> dict:
-    new_post = post.model_dump()
-    new_post["id"] = randrange(0, 1000000)
-    my_posts.append(new_post)
+    cursor.execute(
+        """ INSERT INTO post (title, content, published) VALUES(%s, %s, %s) RETURNING * """,
+        (
+            post.title,
+            post.content,
+            post.published,
+        ),
+    )
+    new_post = cursor.fetchone()
+    conn.commit()
+
     return {"message": "post succeeefully created", "data": new_post}
 
 
+# GET A SINGLE POST
 @app.get("/posts/{id}", status_code=status.HTTP_200_OK)
-async def get_post(id: int) -> dict:
-    for post in my_posts:
-        if post["id"] == id:
-            return {"message": "post found", "data": post}
-    raise HTTPException(status_code=404, detail=f"post with id: {id} was not found")
+async def get_post(id: str) -> dict:
+    cursor.execute("""SELECT * from post WHERE id = %s """, (id))
+    post = cursor.fetchone()
+    conn.commit()
+    if not post:
+        raise HTTPException(
+            status_code=404, detail=f"post with id: {str(id),} was not found"
+        )
+    return {"message": "post found", "data": post}
 
 
+# UPDATE POST
 @app.put("/posts/{id}", status_code=status.HTTP_200_OK)
-async def update_post(id: int, updated_post: UpdatePost) -> dict:
-    for index, post in enumerate(my_posts):
-        if post["id"] == id:
-            my_posts[index] = updated_post.model_dump()
-            my_posts[index]["id"] = id
-            return Response(
-                content=f'{{"message": "post updated successfully", "data": {my_posts[index]}}}'
-            )
+async def update_post(id: str, updated_post: UpdatePost) -> dict:
+    cursor.execute(
+        """ UPDATE post SET title = %s, content=%s, published = %s WHERE id = %s RETURNING *""",
+        (
+            updated_post.title,
+            updated_post.content,
+            updated_post.published,
+            str(id)
+        ),
+    )
+    updated_post = cursor.fetchone()
+    conn.commit()
+    if not updated_post:
         raise HTTPException(status_code=404, detail=f"post with id: {id} was not found")
+
+    return Response(
+        content="Posts updated successfully", status_code=status.HTTP_200_OK
+    )
 
 
 @app.delete("/posts/{id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_post(id: int) -> Response:
-    for index, post in enumerate(my_posts):
-        if post["id"] == id:
-            my_posts.pop(index)
-            return Response(status_code=status.HTTP_204_NO_CONTENT)
-    raise HTTPException(status_code=404, detail=f"post with id: {id} was not found")
+    cursor.execute(""" DELETE FROM post WHERE id = %s RETURNING *""", (str(id),))
+    deleted_post = cursor.fetchone()
+    conn.commit()
+    if not deleted_post:
+        raise HTTPException(status_code=404, detail=f"post with id: {id} was not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
